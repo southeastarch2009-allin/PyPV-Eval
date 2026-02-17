@@ -117,6 +117,38 @@ def main():
     investment_df = project.export_investment_plan_table('output_投资计划表.csv')
     print("✅ 项目总投资使用计划与资金筹措表: output_投资计划表.csv")
 
+    # 4.5 财务现金流量表
+    project.export_financial_cash_flow_table('output_财务现金流量表.csv')
+    print("✅ 财务现金流量表: output_财务现金流量表.csv")
+
+    # 4.6 项目投资现金流量表
+    project.export_project_investment_cashflow_table('output_项目投资现金流量表.csv')
+    print("✅ 项目投资现金流量表: output_项目投资现金流量表.csv")
+
+    # 4.7 项目资本金现金流量表
+    project.export_capital_cashflow_table('output_资本金现金流量表.csv')
+    print("✅ 项目资本金现金流量表: output_资本金现金流量表.csv")
+
+    # 4.8 资产负债表
+    project.export_balance_sheet('output_资产负债表.csv')
+    print("✅ 资产负债表: output_资产负债表.csv")
+
+    # 4.9 财务指标汇总表
+    project.export_financial_summary_table('output_财务指标汇总表.csv')
+    print("✅ 财务指标汇总表: output_财务指标汇总表.csv")
+
+    # 4.10 参数汇总表
+    project.export_parameters_summary_table('output_参数汇总表.csv')
+    print("✅ 参数汇总表: output_参数汇总表.csv")
+
+    # 4.11 EVA测算表
+    project.export_eva_table('output_EVA测算表.csv')
+    print("✅ EVA测算表: output_EVA测算表.csv")
+
+    # 4.12 敏感性系数和临界点分析表
+    project.export_sensitivity_summary_table('output_敏感性汇总表.csv')
+    print("✅ 敏感性系数和临界点分析表: output_敏感性汇总表.csv")
+
     # 5. 敏感性分析
     print("\n" + "=" * 80)
     print("📈 正在进行敏感性分析...")

@@ -637,6 +637,453 @@ class PVProject:
 
         return table
 
+    def export_financial_cash_flow_table(self, filename: Optional[str] = None) -> pd.DataFrame:
+        """
+        导出财务现金流量表（融资后分析）
+
+        依据 NB/T 11894-2025 表 B.0.9
+
+        Args:
+            filename: 输出文件名，如 'financial_cashflow.csv'
+
+        Returns:
+            财务现金流量表 DataFrame
+        """
+        if self.df is None:
+            raise CalculationError("请先运行 calculate_cash_flow()")
+
+        df = self.df.copy()
+
+        # 创建财务现金流量表
+        table = pd.DataFrame({
+            '年份': ['建设期'] + [f'第{i}年' for i in range(1, Constants.OPERATION_PERIOD + 1)],
+            '现金流入(万元)': [0] + list(df.loc[2:, 'Revenue_Exc'].values) + [df.loc[Constants.OPERATION_PERIOD + 1, 'Revenue_Exc'] +
+                self.static_invest * Constants.RESIDUAL_RATIO + self.capacity * Constants.WORKING_CAPITAL_PER_MW],
+            '现金流出(万元)': [df.loc[1, 'Net_CF_After']] + list(
+                (df.loc[2:, 'OM_Cost'] + df.loc[2:, 'Surtax'] + df.loc[2:, 'Income_Tax'] +
+                 df.loc[2:, 'OM_Cost'] * 0).values) + [df.loc[Constants.OPERATION_PERIOD + 1, 'OM_Cost'] +
+                df.loc[Constants.OPERATION_PERIOD + 1, 'Surtax'] + df.loc[Constants.OPERATION_PERIOD + 1, 'Income_Tax']],
+            '净现金流量(万元)': [df.loc[1, 'Net_CF_After']] + list(df.loc[2:, 'Net_CF_After'].values),
+            '累计净现金流量(万元)': [df.loc[1, 'Net_CF_After']] + list(df.loc[2:, 'Net_CF_After'].cumsum().values),
+        })
+
+        if filename:
+            table.to_csv(filename, index=False, encoding='utf-8-sig')
+            logger.info(f"财务现金流量表已保存到: {filename}")
+
+        return table
+
+    def export_project_investment_cashflow_table(self, filename: Optional[str] = None) -> pd.DataFrame:
+        """
+        导出项目投资现金流量表（融资前分析）
+
+        依据 NB/T 11894-2025 表 B.0.7
+
+        Args:
+            filename: 输出文件名，如 'project_investment_cashflow.csv'
+
+        Returns:
+            项目投资现金流量表 DataFrame
+        """
+        if self.df is None:
+            raise CalculationError("请先运行 calculate_cash_flow()")
+
+        df = self.df.copy()
+
+        table = pd.DataFrame({
+            '年份': ['建设期'] + [f'第{i}年' for i in range(1, Constants.OPERATION_PERIOD + 1)],
+            '现金流入(万元)': [0] + list(df.loc[2:, 'Revenue_Exc'].values) + [df.loc[Constants.OPERATION_PERIOD + 1, 'Revenue_Exc'] +
+                self.static_invest * Constants.RESIDUAL_RATIO + self.capacity * Constants.WORKING_CAPITAL_PER_MW],
+            '现金流出(万元)': [df.loc[1, 'Net_CF_Pre']] + list(
+                (df.loc[2:, 'OM_Cost'] + df.loc[2:, 'Surtax']).values) + [df.loc[Constants.OPERATION_PERIOD + 1, 'OM_Cost'] +
+                df.loc[Constants.OPERATION_PERIOD + 1, 'Surtax']],
+            '所得税前净现金流量(万元)': [df.loc[1, 'Net_CF_Pre']] + list(df.loc[2:, 'Net_CF_Pre'].values),
+            '累计所得税前净现金流量(万元)': [df.loc[1, 'Net_CF_Pre']] + list(df.loc[2:, 'Net_CF_Pre'].cumsum().values),
+        })
+
+        if filename:
+            table.to_csv(filename, index=False, encoding='utf-8-sig')
+            logger.info(f"项目投资现金流量表已保存到: {filename}")
+
+        return table
+
+    def export_capital_cashflow_table(self, filename: Optional[str] = None) -> pd.DataFrame:
+        """
+        导出项目资本金现金流量表
+
+        依据 NB/T 11894-2025 表 B.0.8
+
+        Args:
+            filename: 输出文件名，如 'capital_cashflow.csv'
+
+        Returns:
+            资本金现金流量表 DataFrame
+        """
+        if self.df is None:
+            raise CalculationError("请先运行 calculate_cash_flow()")
+
+        df = self.df.copy()
+
+        # 资本金投入
+        capital_invest = self.static_invest * self.capital_ratio
+        working_capital = self.capacity * Constants.WORKING_CAPITAL_PER_MW
+
+        table = pd.DataFrame({
+            '年份': ['建设期'] + [f'第{i}年' for i in range(1, Constants.OPERATION_PERIOD + 1)],
+            '现金流入(万元)': [0] + list(df.loc[2:, 'Net_CF_After'].values) + [df.loc[Constants.OPERATION_PERIOD + 1, 'Net_CF_After'] +
+                self.static_invest * Constants.RESIDUAL_RATIO + working_capital],
+            '资本金投入(万元)': [-(capital_invest + working_capital * self.capital_ratio)] + [0] * Constants.OPERATION_PERIOD,
+            '借款本金偿还(万元)': [0] * (Constants.OPERATION_PERIOD + 1),
+            '借款利息支付(万元)': [0] * (Constants.OPERATION_PERIOD + 1),
+            '现金流出(万元)': [-(capital_invest + working_capital * self.capital_ratio)] + [0] * Constants.OPERATION_PERIOD,
+            '净现金流量(万元)': [-(capital_invest + working_capital * self.capital_ratio)] + list(df.loc[2:, 'Net_CF_After'].values),
+            '累计净现金流量(万元)': [-(capital_invest + working_capital * self.capital_ratio)] + list(df.loc[2:, 'Net_CF_After'].cumsum().values),
+        })
+
+        if filename:
+            table.to_csv(filename, index=False, encoding='utf-8-sig')
+            logger.info(f"资本金现金流量表已保存到: {filename}")
+
+        return table
+
+    def export_balance_sheet(self, filename: Optional[str] = None) -> pd.DataFrame:
+        """
+        导出资产负债表
+
+        依据 NB/T 11894-2025 表 B.0.10
+
+        Args:
+            filename: 输出文件名，如 'balance_sheet.csv'
+
+        Returns:
+            资产负债表 DataFrame
+        """
+        if self.df is None:
+            raise CalculationError("请先运行 calculate_cash_flow()")
+
+        # 计算累计利润和资产
+        df = self.df[self.df.index >= 2].copy()
+
+        # 重新计算折旧
+        deductible_tax = self.p.get(
+            'deductible_tax',
+            self.static_invest / (1 + Constants.VAT_RATE) * Constants.VAT_RATE
+        )
+        const_interest = self.const_interest
+        fixed_asset_value = self.static_invest + const_interest - deductible_tax
+        depreciation_per_year = fixed_asset_value * Constants.DEPRECIATION_BASE_RATIO / Constants.DEPRECIATION_YEARS
+
+        # 计算累计折旧
+        accumulated_depreciation = []
+        acc_dep = 0
+        for i in range(1, Constants.OPERATION_PERIOD + 1):
+            if i <= Constants.DEPRECIATION_YEARS:
+                acc_dep += depreciation_per_year
+            accumulated_depreciation.append(acc_dep)
+
+        # 计算累计利润
+        cumulative_profit = []
+        cum_profit = 0
+        for i in range(1, Constants.OPERATION_PERIOD + 1):
+            depreciation = depreciation_per_year if i <= Constants.DEPRECIATION_YEARS else 0
+            profit = df.loc[i + 1, 'Revenue_Exc'] - df.loc[i + 1, 'OM_Cost'] - df.loc[i + 1, 'Surtax'] - depreciation
+            after_tax_profit = profit - df.loc[i + 1, 'Income_Tax']
+            cum_profit += after_tax_profit
+            cumulative_profit.append(cum_profit)
+
+        table = pd.DataFrame({
+            '年份': [f'第{i}年' for i in range(1, Constants.OPERATION_PERIOD + 1)],
+            # 资产
+            '流动资产总额(万元)': [self.capacity * Constants.WORKING_CAPITAL_PER_MW] * Constants.OPERATION_PERIOD,
+            '固定资产净值(万元)': [fixed_asset_value - d for d in accumulated_depreciation],
+            '资产总额(万元)': [self.capacity * Constants.WORKING_CAPITAL_PER_MW + fixed_asset_value - d for d in accumulated_depreciation],
+            # 负债
+            '流动负债(万元)': [0] * Constants.OPERATION_PERIOD,
+            '长期借款(万元)': [0] * Constants.OPERATION_PERIOD,
+            '负债合计(万元)': [0] * Constants.OPERATION_PERIOD,
+            # 所有者权益
+            '资本金(万元)': [self.static_invest * self.capital_ratio] * Constants.OPERATION_PERIOD,
+            '累计盈余公积金(万元)': [max(0, p * 0.1) for p in cumulative_profit],  # 假设提取10%盈余公积
+            '累计未分配利润(万元)': cumulative_profit,
+            '所有者权益合计(万元)': [self.static_invest * self.capital_ratio + max(0, p * 0.1) + p for p in cumulative_profit],
+            '负债及所有者权益(万元)': [self.static_invest * self.capital_ratio + max(0, p * 0.1) + p
+                                      for p in cumulative_profit],
+        })
+
+        if filename:
+            table.to_csv(filename, index=False, encoding='utf-8-sig')
+            logger.info(f"资产负债表已保存到: {filename}")
+
+        return table
+
+    def export_financial_summary_table(self, filename: Optional[str] = None) -> pd.DataFrame:
+        """
+        导出财务指标汇总表
+
+        Args:
+            filename: 输出文件名，如 'financial_summary.csv'
+
+        Returns:
+            财务指标汇总表 DataFrame
+        """
+        if self.df is None:
+            raise CalculationError("请先运行 calculate_cash_flow()")
+
+        metrics = self.get_metrics()
+
+        # 计算更多财务指标
+        df = self.df[self.df.index >= 2].copy()
+
+        # 计算总投资收益率 (ROI)
+        total_profit = df['Revenue_Exc'].sum() - df['OM_Cost'].sum() - df['Surtax'].sum()
+        roi = total_profit / self.total_invest * 100
+
+        # 计算投资利税率
+        total_tax = df['VAT_Payable'].sum() + df['Surtax'].sum() + df['Income_Tax'].sum()
+        investment_profit_tax_rate = (total_profit + total_tax) / self.total_invest * 100
+
+        table = pd.DataFrame({
+            '指标': [
+                '项目总投资(万元)',
+                '建设期利息(万元)',
+                '全投资IRR(税前,%)',
+                '全投资IRR(税后,%)',
+                '投资回收期(年)',
+                '总投资收益率(ROI,%)',
+                '投资利税率(%)',
+                '年均净利润(万元)',
+                '25年累计净利润(万元)',
+                '装机容量(MW)',
+                '单位造价(元/W)',
+            ],
+            '数值': [
+                metrics['总投资'],
+                metrics['建设期利息'],
+                metrics['全投资IRR(税前)'],
+                metrics['全投资IRR(税后)'],
+                metrics['投资回收期(年)'],
+                round(roi, 2),
+                round(investment_profit_tax_rate, 2),
+                round(df['Revenue_Exc'].sum() - df['OM_Cost'].sum() - df['Surtax'].sum() - df['Income_Tax'].sum(), 2) / 25,
+                round(df['Revenue_Exc'].sum() - df['OM_Cost'].sum() - df['Surtax'].sum() - df['Income_Tax'].sum(), 2),
+                self.capacity,
+                round(self.static_invest / self.capacity * 10000, 2),
+            ],
+        })
+
+        if filename:
+            table.to_csv(filename, index=False, encoding='utf-8-sig')
+            logger.info(f"财务指标汇总表已保存到: {filename}")
+
+        return table
+
+    def export_parameters_summary_table(self, filename: Optional[str] = None) -> pd.DataFrame:
+        """
+        导出参数汇总表
+
+        Args:
+            filename: 输出文件名，如 'parameters_summary.csv'
+
+        Returns:
+            参数汇总表 DataFrame
+        """
+        table = pd.DataFrame({
+            '参数类别': [
+                '基础参数',
+                '基础参数',
+                '基础参数',
+                '基础参数',
+                '收益模式',
+                '电价参数',
+                '电价参数',
+                '电价参数',
+                '融资参数',
+                '融资参数',
+                '税务参数',
+            ],
+            '参数名称': [
+                '装机容量',
+                '静态投资',
+                '年利用小时数',
+                '建设期(年)',
+                '收益模式',
+                '上网电价' if self.mode == Constants.MODE_FULL_GRID else '零售电价',
+                '上网电价' if self.mode == Constants.MODE_FULL_GRID else '余电上网电价',
+                '自用比例' if self.mode == Constants.MODE_SELF_CONSUMPTION else '-',
+                '资本金比例',
+                '贷款利率',
+                '可抵扣进项税',
+            ],
+            '参数值': [
+                f"{self.capacity} MW",
+                f"{self.static_invest} 万元",
+                f"{self.gen_hours} 小时",
+                Constants.CONSTRUCT_PERIOD,
+                '全额上网' if self.mode == Constants.MODE_FULL_GRID else '自发自用',
+                f"{self.price_tax_inc if self.mode == Constants.MODE_FULL_GRID else self.retail_price} 元/kWh",
+                f"-" if self.mode == Constants.MODE_FULL_GRID else f"{self.feedin_price} 元/kWh",
+                f"{self.self_consumption_ratio:.1%}" if self.mode == Constants.MODE_SELF_CONSUMPTION else "-",
+                f"{self.capital_ratio:.1%}",
+                f"{self.loan_rate:.2%}",
+                f"{self.p.get('deductible_tax', '自动计算')} 万元",
+            ],
+            '备注': [
+                '-',
+                '-',
+                '-',
+                '-',
+                '-',
+                '-',
+                '-',
+                '-',
+                '-',
+                '-',
+                '按13%税率估算',
+            ],
+        })
+
+        if filename:
+            table.to_csv(filename, index=False, encoding='utf-8-sig')
+            logger.info(f"参数汇总表已保存到: {filename}")
+
+        return table
+
+    def export_eva_table(self, filename: Optional[str] = None, wacc: float = 0.06) -> pd.DataFrame:
+        """
+        导出EVA（经济增加值）测算表
+
+        EVA = 税后净营业利润 - 资本成本
+
+        Args:
+            filename: 输出文件名，如 'eva_analysis.csv'
+            wacc: 加权平均资本成本，默认6%
+
+        Returns:
+            EVA测算表 DataFrame
+        """
+        if self.df is None:
+            raise CalculationError("请先运行 calculate_cash_flow()")
+
+        df = self.df[self.df.index >= 2].copy()
+
+        # 计算税后净营业利润 (NOPAT)
+        deductible_tax = self.p.get(
+            'deductible_tax',
+            self.static_invest / (1 + Constants.VAT_RATE) * Constants.VAT_RATE
+        )
+        const_interest = self.const_interest
+        fixed_asset_value = self.static_invest + const_interest - deductible_tax
+        depreciation_per_year = fixed_asset_value * Constants.DEPRECIATION_BASE_RATIO / Constants.DEPRECIATION_YEARS
+
+        nopat_list = []
+        capital_list = []
+        eva_list = []
+
+        capital = self.total_invest  # 初始投资
+
+        for i in range(1, Constants.OPERATION_PERIOD + 1):
+            depreciation = depreciation_per_year if i <= Constants.DEPRECIATION_YEARS else 0
+
+            # 税后净营业利润 = 净利润 + 利息支出(1-税率) + 所得税
+            profit = df.loc[i + 1, 'Revenue_Exc'] - df.loc[i + 1, 'OM_Cost'] - df.loc[i + 1, 'Surtax'] - depreciation
+            income_tax = df.loc[i + 1, 'Income_Tax']
+            nopat = profit - income_tax
+
+            nopat_list.append(nopat)
+
+            # 资本占用 (年末)
+            if i <= Constants.DEPRECIATION_YEARS:
+                capital = capital - depreciation_per_year
+            capital_list.append(capital)
+
+            # EVA = NOPAT - 资本占用 × WACC
+            eva = nopat - capital * wacc
+            eva_list.append(eva)
+
+        table = pd.DataFrame({
+            '年份': [f'第{i}年' for i in range(1, Constants.OPERATION_PERIOD + 1)],
+            '税后净营业利润(万元)': nopat_list,
+            '资本占用(万元)': capital_list,
+            '资本成本(万元)': [c * wacc for c in capital_list],
+            f'EVA(万元,WACC={wacc:.0%})': eva_list,
+            'EVA累计(万元)': pd.Series(eva_list).cumsum().tolist(),
+        })
+
+        if filename:
+            table.to_csv(filename, index=False, encoding='utf-8-sig')
+            logger.info(f"EVA测算表已保存到: {filename}")
+
+        return table
+
+    def export_sensitivity_summary_table(
+        self,
+        filename: Optional[str] = None,
+        factors: Optional[list] = None,
+        variation: float = 0.10
+    ) -> pd.DataFrame:
+        """
+        导出敏感性系数和临界点分析表
+
+        Args:
+            filename: 输出文件名，如 'sensitivity_summary.csv'
+            factors: 要分析的因素列表，默认分析主要因素
+            variation: 变化范围，默认±10%
+
+        Returns:
+            敏感性汇总表 DataFrame
+        """
+        if self.df is None:
+            raise CalculationError("请先运行 calculate_cash_flow()")
+
+        metrics = self.get_metrics()
+        base_irr = metrics['全投资IRR(税前)']
+
+        # 确定要分析的因素
+        if factors is None:
+            if self.mode == Constants.MODE_SELF_CONSUMPTION:
+                factors = ['static_invest', 'hours', 'retail_price', 'feedin_price', 'self_consumption_ratio']
+                factor_names = ['静态投资', '利用小时数', '零售电价', '上网电价', '自用比例']
+            else:
+                factors = ['static_invest', 'hours', 'price_tax_inc']
+                factor_names = ['静态投资', '利用小时数', '上网电价']
+
+        results = []
+
+        for factor, name in zip(factors, factor_names):
+            # 进行敏感性分析
+            sens_df = sensitivity_analysis(self.p, factor, variation_range=variation, steps=3)
+
+            # 提取关键信息
+            irr_values = sens_df['IRR(税前)%'].dropna().values
+            if len(irr_values) >= 2:
+                irr_max = irr_values.max()
+                irr_min = irr_values.min()
+                irr_range = irr_max - irr_min
+
+                # 计算敏感度系数
+                sensitivity_coefficient = irr_range / base_irr / (2 * variation)
+
+                # 计算临界点（IRR=0时的变化率）
+                # 简化计算：假设线性关系
+                critical_change = -base_irr / (irr_values[2] - irr_values[0]) * variation * 2 if irr_values[0] != irr_values[2] else 0
+
+                results.append({
+                    '敏感因素': name,
+                    '敏感度系数': round(sensitivity_coefficient, 3),
+                    'IRR变化范围(%)': f"{irr_min:.2f} ~ {irr_max:.2f}",
+                    'IRR变化幅度(%)': round(irr_range, 2),
+                    '临界点(%)': f"{critical_change:.1f}%" if critical_change != 0 else "无法达到",
+                    '敏感程度': '高' if abs(sensitivity_coefficient) > 1.5 else '中' if abs(sensitivity_coefficient) > 0.8 else '低',
+                })
+
+        table = pd.DataFrame(results)
+
+        if filename:
+            table.to_csv(filename, index=False, encoding='utf-8-sig')
+            logger.info(f"敏感性汇总表已保存到: {filename}")
+
+        return table
+
 
 # ==============================================================================
 # 敏感性分析
