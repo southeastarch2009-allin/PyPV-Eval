@@ -425,6 +425,310 @@ class PVProject:
         except Exception as e:
             raise CalculationError(f"指标计算失败: {e}") from e
 
+    # ==============================================================================
+    # 财务报表输出方法
+    # ==============================================================================
+
+    def export_revenue_tax_table(self, filename: Optional[str] = None) -> pd.DataFrame:
+        """
+        导出收入和税金表
+
+        依据 NB/T 11894-2025 表 B.0.3
+
+        Args:
+            filename: 输出文件名，如 'revenue_tax.csv'，为 None 则返回 DataFrame
+
+        Returns:
+            收入和税金表 DataFrame
+        """
+        if self.df is None:
+            raise CalculationError("请先运行 calculate_cash_flow()")
+
+        # 提取运营期数据
+        df = self.df[self.df.index >= 2].copy()
+
+        # 创建收入和税金表
+        table = pd.DataFrame({
+            '年份': [f'第{i}年' for i in range(1, Constants.OPERATION_PERIOD + 1)],
+            '发电量(MWh)': df['Generation'].values,
+            '营业收入(含税,万元)': df['Revenue_Inc'].values,
+            '营业收入(不含税,万元)': df['Revenue_Exc'].values,
+            '增值税(万元)': df['Output_VAT'].values,
+            '增值税实缴(万元)': df['VAT_Payable'].values,
+            '附加税(万元)': df['Surtax'].values,
+        })
+
+        if filename:
+            table.to_csv(filename, index=False, encoding='utf-8-sig')
+            logger.info(f"收入和税金表已保存到: {filename}")
+
+        return table
+
+    def export_total_cost_table(self, filename: Optional[str] = None) -> pd.DataFrame:
+        """
+        导出总成本费用估算表
+
+        依据 NB/T 11894-2025 表 B.0.5
+
+        Args:
+            filename: 输出文件名，如 'total_cost.csv'
+
+        Returns:
+            总成本费用表 DataFrame
+        """
+        if self.df is None:
+            raise CalculationError("请先运行 calculate_cash_flow()")
+
+        df = self.df[self.df.index >= 2].copy()
+
+        # 重新计算折旧
+        deductible_tax = self.p.get(
+            'deductible_tax',
+            self.static_invest / (1 + Constants.VAT_RATE) * Constants.VAT_RATE
+        )
+        const_interest = self.const_interest
+        fixed_asset_value = self.static_invest + const_interest - deductible_tax
+
+        depreciation_per_year = fixed_asset_value * Constants.DEPRECIATION_BASE_RATIO / Constants.DEPRECIATION_YEARS
+
+        # 创建总成本费用表
+        table = pd.DataFrame({
+            '年份': [f'第{i}年' for i in range(1, Constants.OPERATION_PERIOD + 1)],
+            '运维成本(万元)': df['OM_Cost'].values,
+            '折旧费(万元)': [depreciation_per_year if i <= Constants.DEPRECIATION_YEARS else 0
+                            for i in range(1, Constants.OPERATION_PERIOD + 1)],
+            '摊销费(万元)': [0.0] * Constants.OPERATION_PERIOD,
+            '财务费用(万元)': [0.0] * Constants.OPERATION_PERIOD,  # 融资前分析
+            '总成本费用(万元)': df['OM_Cost'].values + [depreciation_per_year if i <= Constants.DEPRECIATION_YEARS else 0
+                            for i in range(1, Constants.OPERATION_PERIOD + 1)],
+        })
+
+        # 经营成本 = 总成本 - 折旧 - 摊销 - 财务费用
+        table['经营成本(万元)'] = table['运维成本(万元)']
+
+        if filename:
+            table.to_csv(filename, index=False, encoding='utf-8-sig')
+            logger.info(f"总成本费用表已保存到: {filename}")
+
+        return table
+
+    def export_profit_table(self, filename: Optional[str] = None) -> pd.DataFrame:
+        """
+        导出利润与利润分配表
+
+        依据 NB/T 11894-2025 表 B.0.6
+
+        Args:
+            filename: 输出文件名，如 'profit.csv'
+
+        Returns:
+            利润表 DataFrame
+        """
+        if self.df is None:
+            raise CalculationError("请先运行 calculate_cash_flow()")
+
+        df = self.df[self.df.index >= 2].copy()
+
+        # 重新计算折旧
+        deductible_tax = self.p.get(
+            'deductible_tax',
+            self.static_invest / (1 + Constants.VAT_RATE) * Constants.VAT_RATE
+        )
+        const_interest = self.const_interest
+        fixed_asset_value = self.static_invest + const_interest - deductible_tax
+        depreciation_per_year = fixed_asset_value * Constants.DEPRECIATION_BASE_RATIO / Constants.DEPRECIATION_YEARS
+
+        # 计算利润
+        profit_list = []
+        for i in range(1, Constants.OPERATION_PERIOD + 1):
+            depreciation = depreciation_per_year if i <= Constants.DEPRECIATION_YEARS else 0
+            profit = df.loc[i + 1, 'Revenue_Exc'] - df.loc[i + 1, 'OM_Cost'] - df.loc[i + 1, 'Surtax'] - depreciation
+            profit_list.append(profit)
+
+        # 创建利润表
+        table = pd.DataFrame({
+            '年份': [f'第{i}年' for i in range(1, Constants.OPERATION_PERIOD + 1)],
+            '营业收入(不含税,万元)': df['Revenue_Exc'].values,
+            '营业税金及附加(万元)': df['Surtax'].values,
+            '总成本费用(万元)': df['OM_Cost'].values + [depreciation_per_year if i <= Constants.DEPRECIATION_YEARS else 0
+                            for i in range(1, Constants.OPERATION_PERIOD + 1)],
+            '利润总额(万元)': profit_list,
+            '所得税(万元)': df['Income_Tax'].values,
+            '净利润(万元)': [p - t for p, t in zip(profit_list, df['Income_Tax'].values)],
+        })
+
+        # 累计净利润
+        table['累计净利润(万元)'] = table['净利润(万元)'].cumsum()
+
+        if filename:
+            table.to_csv(filename, index=False, encoding='utf-8-sig')
+            logger.info(f"利润表已保存到: {filename}")
+
+        return table
+
+    def export_investment_plan_table(self, filename: Optional[str] = None) -> pd.DataFrame:
+        """
+        导出项目总投资使用计划与资金筹措表
+
+        依据 NB/T 11894-2025 表 B.0.2
+
+        Args:
+            filename: 输出文件名，如 'investment_plan.csv'
+
+        Returns:
+            投资计划表 DataFrame
+        """
+        # 建设期利息
+        const_interest = self.const_interest
+        working_capital = self.capacity * Constants.WORKING_CAPITAL_PER_MW
+
+        # 创建投资计划表
+        table = pd.DataFrame({
+            '项目': [
+                '建设投资',
+                '建设期利息',
+                '流动资金',
+                '项目总投资'
+            ],
+            '合计(万元)': [
+                self.static_invest,
+                const_interest,
+                working_capital,
+                self.total_invest
+            ],
+            '第1年(万元)': [
+                self.static_invest,
+                const_interest,
+                working_capital,
+                self.static_invest + const_interest + working_capital
+            ]
+        })
+
+        # 资本金和银行贷款
+        capital_amount = self.static_invest * self.capital_ratio
+        loan_amount = self.static_invest * (1 - self.capital_ratio)
+        loan_with_interest = loan_amount + const_interest
+
+        # 添加筹措部分
+        funding_df = pd.DataFrame({
+            '项目': [
+                '项目资本金',
+                '银行贷款',
+                '资金筹措合计'
+            ],
+            '合计(万元)': [
+                capital_amount + working_capital * self.capital_ratio,  # 假设流动资金也按相同比例
+                loan_with_interest + working_capital * (1 - self.capital_ratio),
+                capital_amount + working_capital + loan_with_interest
+            ],
+            '第1年(万元)': [
+                capital_amount + working_capital * self.capital_ratio,
+                loan_with_interest + working_capital * (1 - self.capital_ratio),
+                capital_amount + working_capital + loan_with_interest
+            ]
+        })
+
+        table = pd.concat([table, pd.DataFrame({'项目': [''], '合计(万元)': [''], '第1年(万元)': ['']})], ignore_index=True)
+        table = pd.concat([table, funding_df], ignore_index=True)
+
+        if filename:
+            table.to_csv(filename, index=False, encoding='utf-8-sig')
+            logger.info(f"投资计划表已保存到: {filename}")
+
+        return table
+
+
+# ==============================================================================
+# 敏感性分析
+# ==============================================================================
+
+def sensitivity_analysis(
+    base_params: Dict[str, Any],
+    factor: str,
+    variation_range: float = 0.1,
+    steps: int = 5
+) -> pd.DataFrame:
+    """
+    单因素敏感性分析
+
+    分析某个因素变化对 IRR 的影响
+
+    Args:
+        base_params: 基础项目参数
+        factor: 要分析的因素，支持:
+            - 'static_invest': 静态投资
+            - 'price'或'price_tax_inc': 电价
+            - 'hours'或'gen_hours': 发电量/利用小时数
+            - 'retail_price': 零售电价（自发自用模式）
+            - 'feedin_price': 上网电价（自发自用模式）
+            - 'self_consumption_ratio': 自用比例（自发自用模式）
+        variation_range: 变化范围，默认 ±10%
+        steps: 分析步数，默认 5 步（-10%, -5%, 0%, +5%, +10%）
+
+    Returns:
+        敏感性分析结果 DataFrame
+    """
+    results = []
+
+    # 获取基准值
+    base_value = base_params.get(factor)
+    if base_value is None:
+        # 处理参数名映射
+        if factor in ['price', 'price_tax_inc']:
+            base_value = base_params.get('price_tax_inc')
+        elif factor in ['hours', 'gen_hours']:
+            base_value = base_params.get('hours', 1000)
+        else:
+            raise ValueError(f"未知的因素: {factor}")
+
+    # 生成变化序列
+    variations = np.linspace(-variation_range, variation_range, steps)
+
+    for var in variations:
+        params_temp = base_params.copy()
+        new_value = base_value * (1 + var)
+        params_temp[factor] = new_value
+
+        # 如果是自发自用模式，需要特殊处理
+        if factor == 'retail_price' or factor == 'feedin_price' or factor == 'self_consumption_ratio':
+            params_temp[factor] = new_value
+
+        try:
+            project = PVProject(params_temp)
+            project.calculate_cash_flow()
+            metrics = project.get_metrics()
+            irr = metrics['全投资IRR(税前)']
+
+            results.append({
+                '因素': factor,
+                '变化率': f'{var*100:+.1f}%',
+                '数值': new_value,
+                'IRR(税前)%': irr,
+                'IRR变化': f"{irr - metrics['全投资IRR(税前)']:+.2f}" if var == 0 else f""
+            })
+        except Exception as e:
+            logger.error(f"敏感性分析失败 (变化率={var*100:.1f}%): {e}")
+            results.append({
+                '因素': factor,
+                '变化率': f'{var*100:+.1f}%',
+                '数值': new_value,
+                'IRR(税前)%': None,
+                'IRR变化': "计算失败"
+            })
+
+    df = pd.DataFrame(results)
+
+    # 计算敏感度系数
+    if len(df) > 0 and df['IRR(税前)%'].notna().sum() >= 2:
+        base_irr = df.loc[df['变化率'] == '0.0%', 'IRR(税前)%'].values[0] if '0.0%' in df['变化率'].values else df['IRR(税前)%'].values[len(df)//2]
+        df['敏感度系数'] = df.apply(lambda row: (
+            (row['IRR(税前)%'] - base_irr) / base_irr / (float(row['变化率'].replace('%', '')) / 100)
+            if row['IRR(税前)%'] is not None and row['变化率'] != '0.0%' else 0.0
+        ), axis=1)
+
+    logger.info(f"敏感性分析完成: 因素={factor}")
+    return df
+
 
 # ==============================================================================
 # 高级功能: 反向求解 (Goal Seek)
