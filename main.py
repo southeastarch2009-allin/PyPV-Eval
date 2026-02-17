@@ -1,7 +1,8 @@
 # ==============================================================================
 # 项目名称: PyPV-Eval (Python Photovoltaic Evaluation Engine)
-# 版本: v1.0.2 (Improved)
-# 核心依据: NB/T 11894-2025《光伏发电项目经济评价规范》# ==============================================================================
+# 版本: v1.1.0 (Enhanced - 支持自发自用模式)
+# 核心依据: NB/T 11894-2025《光伏发电项目经济评价规范》
+# ==============================================================================
 
 from __future__ import annotations
 
@@ -18,6 +19,11 @@ from scipy import optimize
 
 class Constants:
     """项目常量配置"""
+
+    # 收益模式
+    MODE_FULL_GRID = 'full_grid'              # 全额上网模式
+    MODE_SELF_CONSUMPTION = 'self_consumption'  # 自发自用、余额上网模式
+
     # 税率相关
     VAT_RATE = 0.13              # 增值税率 13%
     SURTAX_RATE = 0.10           # 附加税率 10% (城建7%+教育3%)
@@ -82,12 +88,17 @@ class PVProject:
 
     严格遵循 NB/T 11894-2025《光伏发电项目经济评价规范》
 
+    支持两种收益模式:
+        1. 全额上网 (full_grid): 全部发电量按上网电价销售
+        2. 自发自用 (self_consumption): 自用部分节省购电成本，余电上网销售
+
     Attributes:
         capacity: 装机容量 (MW)
         static_invest: 静态投资 (万元)
         gen_hours: 年利用小时数 (h)
         loan_rate: 长期贷款利率
         capital_ratio: 资本金比例
+        mode: 收益模式 ('full_grid' 或 'self_consumption')
     """
 
     def __init__(self, params: Dict[str, Any]) -> None:
@@ -96,13 +107,23 @@ class PVProject:
 
         Args:
             params: 项目参数字典，包含以下键:
+
+            通用参数:
                 - capacity_mw: 装机容量 (MW)
                 - static_invest: 静态投资 (万元)
                 - hours: 年利用小时数 (h)，默认1000
                 - loan_rate: 长期贷款利率，默认0.049
                 - capital_ratio: 资本金比例，默认0.2
-                - price_tax_inc: 含税电价 (元/kWh)
+                - mode: 收益模式，'full_grid'(默认) 或 'self_consumption'
                 - deductible_tax: 可抵扣进项税 (万元)，可选
+
+            全额上网模式 (mode='full_grid'):
+                - price_tax_inc: 含税上网电价 (元/kWh)
+
+            自发自用模式 (mode='self_consumption'):
+                - self_consumption_ratio: 自用比例 (0-1)，如0.8表示80%自用
+                - retail_price: 零售电价/工商业电价 (元/kWh)，自用节省的单价
+                - feedin_price: 余电上网电价 (元/kWh)，余电销售的单价
 
         Raises:
             InputValidationError: 参数验证失败
@@ -115,13 +136,23 @@ class PVProject:
 
     def _validate_and_init_params(self) -> None:
         """参数校验与标准化"""
-        # 验证必需参数
-        required_keys = ['capacity_mw', 'static_invest', 'price_tax_inc']
+        # 获取模式参数，默认为全额上网
+        self.mode = self.p.get('mode', Constants.MODE_FULL_GRID)
+
+        # 验证模式参数
+        if self.mode not in [Constants.MODE_FULL_GRID, Constants.MODE_SELF_CONSUMPTION]:
+            raise InputValidationError(
+                f"无效的 mode 参数: {self.mode}。"
+                f"必须是 '{Constants.MODE_FULL_GRID}' 或 '{Constants.MODE_SELF_CONSUMPTION}'"
+            )
+
+        # 验证通用必需参数
+        required_keys = ['capacity_mw', 'static_invest']
         missing_keys = [k for k in required_keys if k not in self.p]
         if missing_keys:
             raise InputValidationError(f"缺少必需参数: {missing_keys}")
 
-        # 获取并验证参数
+        # 获取并验证通用参数
         self.capacity = float(self.p.get('capacity_mw', 0))
         self.static_invest = float(self.p.get('static_invest', 0))
         self.gen_hours = float(self.p.get('hours', 1000))
@@ -140,6 +171,32 @@ class PVProject:
 
         # 预计算贷款本金
         self.loan_principal = self.static_invest * (1 - self.capital_ratio)
+
+        # 根据模式验证特定参数
+        if self.mode == Constants.MODE_FULL_GRID:
+            if 'price_tax_inc' not in self.p:
+                raise InputValidationError("全额上网模式需要参数: price_tax_inc")
+            self.price_tax_inc = float(self.p['price_tax_inc'])
+            logger.info(f"模式: 全额上网, 电价={self.price_tax_inc}元/kWh")
+
+        elif self.mode == Constants.MODE_SELF_CONSUMPTION:
+            required_sc_keys = ['self_consumption_ratio', 'retail_price', 'feedin_price']
+            missing_sc_keys = [k for k in required_sc_keys if k not in self.p]
+            if missing_sc_keys:
+                raise InputValidationError(f"自发自用模式需要参数: {missing_sc_keys}")
+
+            self.self_consumption_ratio = float(self.p['self_consumption_ratio'])
+            self.retail_price = float(self.p['retail_price'])
+            self.feedin_price = float(self.p['feedin_price'])
+
+            # 验证自用比例
+            if not 0 <= self.self_consumption_ratio <= 1:
+                raise InputValidationError("自用比例必须在 [0, 1] 范围内")
+
+            logger.info(
+                f"模式: 自发自用, 自用比例={self.self_consumption_ratio:.1%}, "
+                f"零售电价={self.retail_price}元/kWh, 上网电价={self.feedin_price}元/kWh"
+            )
 
         logger.info(f"项目参数验证通过: 容量={self.capacity}MW, 投资={self.static_invest}万元")
 
@@ -219,12 +276,40 @@ class PVProject:
             for y in range(2, Constants.OPERATION_PERIOD + 2):
                 op_year = y - 1
 
-                # 1. 发电与收入
-                generation = self.capacity * self.gen_hours
-                price = self.p['price_tax_inc']
-                rev_inc = generation * 1000 * price / 10000  # 万元
-                rev_exc = rev_inc / (1 + Constants.VAT_RATE)
-                output_vat = rev_inc - rev_exc
+                # 1. 发电与收入计算
+                generation = self.capacity * self.gen_hours  # MWh
+
+                if self.mode == Constants.MODE_FULL_GRID:
+                    # 全额上网模式：全部发电量按上网电价计算
+                    price = self.price_tax_inc
+                    rev_inc = generation * 1000 * price / 10000  # 万元
+                    rev_exc = rev_inc / (1 + Constants.VAT_RATE)
+                    output_vat = rev_inc - rev_exc
+
+                else:  # MODE_SELF_CONSUMPTION
+                    # 自发自用模式：拆分为自用和余电两部分
+                    self_consumed_mwh = generation * self.self_consumption_ratio
+                    surplus_mwh = generation * (1 - self.self_consumption_ratio)
+
+                    # 自用部分收益 = 避免购电的成本节省（按零售电价）
+                    # 注意：自用节省是否涉及VAT处理取决于具体政策
+                    # 这里简化处理：自用部分按不含税零售价计算收益
+                    rev_self_exc = self_consumed_mwh * 1000 * self.retail_price / 10000 / (1 + Constants.VAT_RATE)
+
+                    # 余电上网收益 = 余电 × 上网电价
+                    rev_surplus_inc = surplus_mwh * 1000 * self.feedin_price / 10000
+                    rev_surplus_exc = rev_surplus_inc / (1 + Constants.VAT_RATE)
+                    vat_surplus = rev_surplus_inc - rev_surplus_exc
+
+                    # 总收益
+                    rev_inc = rev_surplus_inc  # 增值税基数只有余电上网部分
+                    rev_exc = rev_self_exc + rev_surplus_exc
+                    output_vat = vat_surplus  # 只有余电上网部分产生销项税
+
+                    logger.debug(
+                        f"第{op_year}年: 发电={generation:.1f}MWh, "
+                        f"自用={self_consumed_mwh:.1f}MWh, 余电={surplus_mwh:.1f}MWh"
+                    )
 
                 df.loc[y, 'Generation'] = generation
                 df.loc[y, 'Revenue_Inc'] = rev_inc
@@ -400,7 +485,7 @@ def goal_seek_investment(
 
 def demo_qionghai_project() -> None:
     """
-    琼海 100MW 集中式光伏项目演示
+    琼海 100MW 集中式光伏项目演示（全额上网模式）
 
     对标数据 (木联能软件):
         - 建设期利息: 780.18 万元
@@ -408,7 +493,7 @@ def demo_qionghai_project() -> None:
         - 全投资IRR(税前): 11.35%
     """
     print("\n" + "=" * 60)
-    print("🌟 PyPV-Eval v1.0.2 - 光伏项目技经评价引擎")
+    print("🌟 PyPV-Eval v1.1.0 - 光伏项目技经评价引擎")
     print("=" * 60)
 
     qionghai_params = {
@@ -452,5 +537,70 @@ def demo_qionghai_project() -> None:
         print(f"\n❌ 未知错误: {e}")
 
 
+def demo_self_consumption_project() -> None:
+    """
+    工商业分布式光伏项目演示（自发自用模式）
+
+    典型场景：
+        - 1MW 工商业屋顶光伏
+        - 自用比例 80%
+        - 工商业电价 0.8 元/kWh
+        - 余电上网电价 0.4 元/kWh
+    """
+    print("\n" + "=" * 60)
+    print("🏢 工商业分布式光伏项目演示（自发自用模式）")
+    print("=" * 60)
+
+    distributed_params = {
+        'capacity_mw': 1.0,              # 1MW
+        'static_invest': 350.0,           # 350万元（约3.5元/W）
+        'mode': 'self_consumption',
+        'self_consumption_ratio': 0.8,    # 80%自用
+        'retail_price': 0.85,             # 工商业电价 0.85元/kWh
+        'feedin_price': 0.42,             # 余电上网价 0.42元/kWh
+        'hours': 1100,                    # 年利用小时数
+        'capital_ratio': 0.3,
+        'loan_rate': 0.04,
+    }
+
+    try:
+        print("\n📊 项目参数:")
+        print(f"   装机容量: {distributed_params['capacity_mw']} MW")
+        print(f"   静态投资: {distributed_params['static_invest']} 万元")
+        print(f"   自用比例: {distributed_params['self_consumption_ratio']:.0%}")
+        print(f"   零售电价: {distributed_params['retail_price']} 元/kWh")
+        print(f"   上网电价: {distributed_params['feedin_price']} 元/kWh")
+
+        project = PVProject(distributed_params)
+        project.calculate_cash_flow()
+        metrics = project.get_metrics()
+
+        print("\n" + "-" * 60)
+        print("✅ 工商业分布式项目技经评价报告")
+        print("-" * 60)
+        print(f"💰 项目总投资:      {metrics['总投资']:>12} 万元")
+        print(f"🏗️  建设期利息:     {metrics['建设期利息']:>12} 万元")
+        print(f"📈 IRR (税前):      {metrics['全投资IRR(税前)']:>12}%")
+        print(f"📉 IRR (税后):      {metrics['全投资IRR(税后)']:>12}%")
+        print(f"📅 投资回收期:      {metrics['投资回收期(年)']:>12} 年")
+        print("-" * 60)
+
+        # 反向求解演示
+        target = 12.0  # 分布式项目目标IRR通常较高
+        print(f"\n🔮 [决策辅助] 若目标 IRR 为 {target}%:")
+        limit = goal_seek_investment(target, distributed_params)
+        if limit is not None:
+            print(f"👉 最大允许静态投资:  {limit:>10.2f} 万元")
+            print(f"👉 相比当前方案盈余:  {limit - distributed_params['static_invest']:>10.2f} 万元")
+        print("=" * 60)
+
+    except (InputValidationError, CalculationError) as e:
+        print(f"\n❌ 错误: {e}")
+    except Exception as e:
+        print(f"\n❌ 未知错误: {e}")
+
+
 if __name__ == "__main__":
+    # 运行两个演示
     demo_qionghai_project()
+    demo_self_consumption_project()
